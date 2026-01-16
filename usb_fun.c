@@ -32,6 +32,26 @@ LARGE_INTEGER start;
 LARGE_INTEGER stop;
 LARGE_INTEGER freq;
 
+static void open_devices(int dev);
+
+static BOOL ensure_device_ready(void)
+{
+    if (ftHandle != NULL && ftStatus == FT_OK)
+    {
+        return TRUE;
+    }
+
+    if (ftHandle != NULL)
+    {
+        FT_Close(ftHandle);
+        ftHandle = NULL;
+    }
+
+    open_devices(0);
+
+    return (ftHandle != NULL && ftStatus == FT_OK);
+}
+
 // ============ 新增的32位指令发送功能 ============
 
 /**
@@ -41,7 +61,7 @@ LARGE_INTEGER freq;
  */
 int send_custom_command(const char* hex_str)
 {
-    if (ftStatus != FT_OK || ftHandle == NULL)
+    if (!ensure_device_ready())
     {
         printf("aERROR:USB device is not connected! \n"); //错误：USB设备未连接！
         return 0;
@@ -156,7 +176,7 @@ static void open_devices( int dev )
 
 static BOOL read_device( UCHAR* buff, ULONG *length )
 {
-    if (ftStatus != FT_OK)
+    if (!ensure_device_ready())
     {
         return FALSE;
     }
@@ -174,7 +194,7 @@ static BOOL read_device( UCHAR* buff, ULONG *length )
 
 static BOOL write_device( UCHAR *data, ULONG *length )
 {
-    if (ftStatus != FT_OK)
+    if (!ensure_device_ready())
     {
         return FALSE;
     }
@@ -241,6 +261,8 @@ unsigned int c2h_transfer(unsigned int size)//读，size=image_h*image*4;
     double bd=0;
     double time_sec;
     int len = 4;
+    BOOL all_zero = TRUE;
+    unsigned int zero_count = 0;
 
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&stop);
@@ -248,8 +270,40 @@ unsigned int c2h_transfer(unsigned int size)//读，size=image_h*image*4;
     bd = (int)(1.0/time_sec);;
     QueryPerformanceCounter(&start);
 
-    write_device((UCHAR *)&FRAME_CMD,(ULONG *)&len); // fpga frame(帧) cmd
-    read_device(c2h_align_mem_tmp,(ULONG *)&size);
+    if (!write_device((UCHAR *)&FRAME_CMD,(ULONG *)&len)) // fpga frame(帧) cmd
+    {
+        printf("gERROR:Frame command send failed\n");
+        return 0;
+    }
+    if (!read_device(c2h_align_mem_tmp,(ULONG *)&size))
+    {
+        printf("hERROR:Frame read failed\n");
+        return 0;
+    }
+
+    if (size > 0)
+    {
+        for (unsigned int i = 0; i < size; i++)
+        {
+            if (c2h_align_mem_tmp[i] == 0)
+            {
+                zero_count++;
+                continue;
+            }
+            if (all_zero)
+            {
+                all_zero = FALSE;
+            }
+        }
+        if (all_zero)
+        {
+            printf("iWARN:Frame data is all zeros (%u bytes)\n", size);
+        }
+        else
+        {
+            printf("iINFO:Frame data zeros %u/%u\n", zero_count, size);
+        }
+    }
 
 
     return (unsigned int)bd;
